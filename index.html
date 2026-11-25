@@ -1201,5 +1201,164 @@
 })();
 </script>
 <!-- === KONEC LIGHTBOX LUPA & NAVIGACE ADD-ON === -->
+  <!-- === AETHER-VAULT MOBILE PINCH-ZOOM & FLOATING CLOSE BUTTON (PŘED </body>) === -->
+<style>
+  /* Vylepšení rozložení Lightboxu na mobilních displejích */
+  @media (max-width: 768px) {
+    #modalViewer { padding: 10px; }
+    #modalViewer .modal-head {
+      flex-wrap: wrap;
+      gap: 8px;
+      padding-right: 52px; /* Místo pro velké plovoucí tlačítko X vpravo nahoře */
+    }
+    #modalViewer .modal-head h3 {
+      width: 100%;
+      font-size: 0.82rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #modalBody {
+      touch-action: none; /* Zabrání prohlížeči zoomovat celou stránku místo obrázku */
+    }
+  }
+
+  /* Výrazné plovoucí tlačítko X vpravo nahoře (náhrada za Esc na mobilu) */
+  #mobileFloatingClose {
+    position: fixed;
+    top: 14px;
+    right: 14px;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: rgba(244, 63, 94, 0.9);
+    border: 2px solid #fda4af;
+    color: #fff;
+    font-size: 1.25rem;
+    font-weight: 800;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 150;
+    box-shadow: 0 4px 18px rgba(244, 63, 94, 0.55);
+    backdrop-filter: blur(6px);
+    transition: transform 0.15s;
+  }
+  #mobileFloatingClose:active {
+    transform: scale(0.9);
+  }
+</style>
+
+<script>
+(function initMobileLightboxPatch() {
+  const modal = document.getElementById('modalViewer');
+  const modalBody = document.getElementById('modalBody');
+  if (!modal || !modalBody) return;
+
+  // 1. Přidání velkého plovoucího tlačítka X vpravo nahoře uvnitř modálu
+  if (!document.getElementById('mobileFloatingClose')) {
+    const closeX = document.createElement('button');
+    closeX.id = 'mobileFloatingClose';
+    closeX.innerHTML = '✕';
+    closeX.title = 'Zavřít náhled (Esc)';
+    closeX.onclick = () => document.getElementById('btnCloseModal')?.click();
+    modal.appendChild(closeX);
+  }
+
+  // 2. Nativní Pinch-to-Zoom (roztažení 2 prsty) a posun 1 prstem na mobilu
+  let mScale = 1;
+  let mPanX = 0, mPanY = 0;
+  let initialPinchDist = 0;
+  let initialScale = 1;
+  let isTouchDragging = false;
+  let touchStartX = 0, touchStartY = 0;
+  let lastTapTime = 0;
+
+  function getTouchDist(t1, t2) {
+    return Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+  }
+
+  function updateMobileImageTransform(animate = false) {
+    const img = modalBody.querySelector('img');
+    const zoomLabel = document.getElementById('lbZoomVal');
+    if (zoomLabel) zoomLabel.textContent = `${Math.round(mScale * 100)}%`;
+    if (!img) return;
+
+    if (mScale <= 1) {
+      mScale = 1;
+      mPanX = 0;
+      mPanY = 0;
+    }
+    img.style.transition = animate ? 'transform 0.18s ease-out' : 'none';
+    img.style.transform = `translate(${mPanX}px, ${mPanY}px) scale(${mScale})`;
+  }
+
+  // Synchronizace s tlačítky + / - / Reset z předchozího add-onu
+  document.getElementById('lbZoomIn')?.addEventListener('click', () => { mScale = Math.min(5, mScale + 0.5); updateMobileImageTransform(true); });
+  document.getElementById('lbZoomOut')?.addEventListener('click', () => { mScale = Math.max(1, mScale - 0.5); updateMobileImageTransform(true); });
+  document.getElementById('lbZoomReset')?.addEventListener('click', () => { mScale = 1; updateMobileImageTransform(true); });
+
+  // Reset při otevření nového obrázku
+  const obs = new MutationObserver(() => {
+    if (modal.style.display === 'flex') {
+      mScale = 1; mPanX = 0; mPanY = 0;
+      updateMobileImageTransform(false);
+    }
+  });
+  obs.observe(modal, { attributes: true, attributeFilter: ['style'] });
+
+  modalBody.addEventListener('touchstart', e => {
+    const img = modalBody.querySelector('img');
+    if (!img) return;
+
+    if (e.touches.length === 2) {
+      // Začátek gesta dvěma prsty (Pinch)
+      isTouchDragging = false;
+      initialPinchDist = getTouchDist(e.touches[0], e.touches[1]);
+      initialScale = mScale;
+    } else if (e.touches.length === 1) {
+      // Dvojité klepnutí prstem (Double-Tap Zoom)
+      const now = Date.now();
+      if (now - lastTapTime < 280) {
+        mScale = mScale > 1 ? 1 : 2.5;
+        updateMobileImageTransform(true);
+        lastTapTime = 0;
+        return;
+      }
+      lastTapTime = now;
+
+      if (mScale > 1) {
+        isTouchDragging = true;
+        touchStartX = e.touches[0].clientX - mPanX;
+        touchStartY = e.touches[0].clientY - mPanY;
+      }
+    }
+  }, { passive: true });
+
+  modalBody.addEventListener('touchmove', e => {
+    const img = modalBody.querySelector('img');
+    if (!img) return;
+
+    if (e.touches.length === 2 && initialPinchDist > 0) {
+      e.preventDefault(); // Zabrání nativnímu zoomu celé stránky
+      const currentDist = getTouchDist(e.touches[0], e.touches[1]);
+      mScale = Math.max(1, Math.min(5, initialScale * (currentDist / initialPinchDist)));
+      updateMobileImageTransform(false);
+    } else if (e.touches.length === 1 && isTouchDragging && mScale > 1) {
+      e.preventDefault();
+      mPanX = e.touches[0].clientX - touchStartX;
+      mPanY = e.touches[0].clientY - touchStartY;
+      updateMobileImageTransform(false);
+    }
+  }, { passive: false });
+
+  modalBody.addEventListener('touchend', e => {
+    if (e.touches.length < 2) initialPinchDist = 0;
+    if (e.touches.length === 0) isTouchDragging = false;
+  });
+})();
+</script>
+<!-- === KONEC MOBILE PINCH-ZOOM PATCHE === -->
 </body>
 </html>
