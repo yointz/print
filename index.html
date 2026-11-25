@@ -804,5 +804,230 @@
     syncConfigUI();
     fetchVaultContents();
   </script>
+  <!-- === AETHER-VAULT TECH & 3D CRYSTAL ADD-ON (VLOŽIT PŘED </body>) === -->
+<script>
+(function initVaultTechAddon() {
+  let isTransferring = false;
+
+  // ---------------------------------------------------------------------------
+  // 1. LEHKÝ 3D ROTUJÍCÍ GEODETICKÝ KRYSTAL DO HLAVIČKY (Čistý HTML5 Canvas 3D)
+  // ---------------------------------------------------------------------------
+  const brandEl = document.querySelector('header .brand');
+  if (brandEl && !document.getElementById('headerCrystal')) {
+    const c = document.createElement('canvas');
+    c.id = 'headerCrystal';
+    c.width = 44;
+    c.height = 44;
+    c.style.cssText = 'width:44px;height:44px;border-radius:8px;background:rgba(15,23,42,0.7);border:1px solid rgba(56,189,248,0.3);flex-shrink:0;';
+    brandEl.insertBefore(c, brandEl.firstChild);
+
+    const ctx = c.getContext('2d');
+    const t = (1 + Math.sqrt(5)) / 2;
+    const rawVerts = [
+      [-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0],
+      [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t],
+      [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]
+    ].map(v => {
+      const len = Math.hypot(v[0], v[1], v[2]);
+      return { x: v[0] / len, y: v[1] / len, z: v[2] / len };
+    });
+
+    const edges = [];
+    for (let i = 0; i < rawVerts.length; i++) {
+      for (let j = i + 1; j < rawVerts.length; j++) {
+        const d = Math.hypot(rawVerts[i].x - rawVerts[j].x, rawVerts[i].y - rawVerts[j].y, rawVerts[i].z - rawVerts[j].z);
+        if (d < 1.15) edges.push([i, j]);
+      }
+    }
+
+    let angleY = 0, angleX = 0.4;
+    function renderMiniCrystal() {
+      const speed = isTransferring ? 0.09 : 0.018;
+      angleY += speed;
+      angleX += speed * 0.45;
+
+      ctx.clearRect(0, 0, 44, 44);
+      const col = isTransferring ? '#10b981' : '#38bdf8';
+
+      // Projekce 3D vrcholů
+      const proj = rawVerts.map(v => {
+        const y1 = v.y * Math.cos(angleX) - v.z * Math.sin(angleX);
+        const z1 = v.y * Math.sin(angleX) + v.z * Math.cos(angleX);
+        const x2 = v.x * Math.cos(angleY) + z1 * Math.sin(angleY);
+        const z2 = -v.x * Math.sin(angleY) + z1 * Math.cos(angleY);
+        const scale = 28 / (2.6 + z2);
+        return { x: 22 + x2 * scale, y: 22 + y1 * scale };
+      });
+
+      // Vnitřní energetické jádro
+      ctx.fillStyle = isTransferring ? 'rgba(16, 185, 129, 0.35)' : 'rgba(168, 85, 247, 0.28)';
+      ctx.beginPath();
+      ctx.arc(22, 22, isTransferring ? 6 : 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Hrany krystalu
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      edges.forEach(([a, b]) => {
+        ctx.moveTo(proj[a].x, proj[a].y);
+        ctx.lineTo(proj[b].x, proj[b].y);
+      });
+      ctx.stroke();
+
+      requestAnimationFrame(renderMiniCrystal);
+    }
+    renderMiniCrystal();
+  }
+
+  // ---------------------------------------------------------------------------
+  // 2. MONITOR API LIMITŮ (Rate-Limit) & KVÓTY REPOZITÁŘE (1 GB GitHub Pages)
+  // ---------------------------------------------------------------------------
+  const teleStrip = document.querySelector('.telemetry-strip');
+  if (teleStrip && !document.getElementById('statRateLimit')) {
+    const rateCard = document.createElement('div');
+    rateCard.className = 'tele-card';
+    rateCard.innerHTML = `
+      <div class="lbl">GitHub API Limit / Kvóta (1 GB)</div>
+      <div class="val" id="statRateLimit" style="font-size:0.86rem;">API: -- / -- • Kvóta: 0.0%</div>
+    `;
+    teleStrip.appendChild(rateCard);
+  }
+
+  let lastRateRemaining = '--';
+  let lastRateLimit = '--';
+
+  function updateQuotaDisplay() {
+    const el = document.getElementById('statRateLimit');
+    if (!el) return;
+    const sizeText = document.getElementById('statSize')?.textContent || '0';
+    const mb = parseFloat(sizeText) || 0;
+    const pct = Math.min(100, (mb / 1024) * 100);
+    el.textContent = `API: ${lastRateRemaining}/${lastRateLimit} • ${pct.toFixed(2)}% z 1GB`;
+    el.style.color = (lastRateRemaining !== '--' && +lastRateRemaining < 15) || pct > 85 ? '#f43f5e' : '#38bdf8';
+  }
+
+  // Zachycení všech fetch požadavků na api.github.com pro sledování Rate-Limitu a animaci krystalu
+  const origFetch = window.fetch;
+  window.fetch = async function(...args) {
+    const urlStr = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
+    const isGhApi = urlStr.includes('api.github.com');
+    if (isGhApi) isTransferring = true;
+
+    try {
+      const response = await origFetch.apply(this, args);
+      if (isGhApi) {
+        const rem = response.headers.get('X-RateLimit-Remaining');
+        const lim = response.headers.get('X-RateLimit-Limit');
+        if (rem !== null) lastRateRemaining = rem;
+        if (lim !== null) lastRateLimit = lim;
+        updateQuotaDisplay();
+      }
+      return response;
+    } finally {
+      if (isGhApi) setTimeout(() => { isTransferring = false; }, 600);
+    }
+  };
+  setInterval(updateQuotaDisplay, 2500);
+
+  // ---------------------------------------------------------------------------
+  // 3. AUTOMATICKÁ OPTIMALIZACE A KOMPRESE OBRÁZKŮ (Canvas WebP/PNG Pipeline)
+  // ---------------------------------------------------------------------------
+  const btnUpload = document.getElementById('btnUpload');
+  if (btnUpload && !document.getElementById('optPanel')) {
+    const optBox = document.createElement('div');
+    optBox.id = 'optPanel';
+    optBox.style.cssText = 'background:#060b16;border:1px solid #1e293b;border-radius:8px;padding:9px 11px;margin-bottom:10px;font-size:0.74rem;';
+    optBox.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;color:#e2e8f0;font-weight:600;">
+          <input type="checkbox" id="chkOptimize" checked style="accent-color:#10b981;">
+          ⚡ Optimalizovat obrázky před nahráním (odstranit EXIF)
+        </label>
+        <span id="optSavedBadge" style="font-family:monospace;color:#10b981;font-size:0.7rem;">Aktivní</span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;color:#94a3b8;">
+        <span>Výstup:</span>
+        <select id="selOptFmt" style="background:#0f172a;border:1px solid #334155;color:#fff;padding:3px 6px;border-radius:5px;font-size:0.72rem;">
+          <option value="image/webp">WebP (Nejmenší velikost)</option>
+          <option value="image/png">Čisté PNG (Bezztrátové bez EXIF)</option>
+          <option value="image/jpeg">JPEG (Tiskový náhled)</option>
+        </select>
+        <span>Kvalita: <strong id="valOptQ" style="color:#38bdf8;font-family:monospace;">88%</strong></span>
+        <input type="range" id="slOptQ" min="0.4" max="1.0" step="0.02" value="0.88" style="flex:1;accent-color:#38bdf8;">
+      </div>
+    `;
+    btnUpload.parentNode.insertBefore(optBox, btnUpload);
+
+    document.getElementById('slOptQ').oninput = e => {
+      document.getElementById('valOptQ').textContent = `${Math.round(e.target.value * 100)}%`;
+    };
+
+    // Funkce pro průchod obrázku přes HTML5 Canvas
+    async function compressImageFile(file, mimeType, quality) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          const c2d = canvas.getContext('2d');
+          c2d.drawImage(img, 0, 0);
+          URL.revokeObjectURL(url);
+
+          canvas.toBlob(blob => {
+            if (!blob || blob.size >= file.size) {
+              resolve(file); // Pokud komprese neušetřila místo, ponechá originál
+              return;
+            }
+            const ext = mimeType === 'image/webp' ? '.webp' : mimeType === 'image/jpeg' ? '.jpg' : '.png';
+            const newName = file.name.replace(/\.[^.]+$/, '') + ext;
+            resolve(new File([blob], newName, { type: mimeType }));
+          }, mimeType, quality);
+        };
+        img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+        img.src = url;
+      });
+    }
+
+    // Zachycení kliknutí na nahrání (capture phase) a optimalizace fronty obrázků před odesláním
+    let bypassCapture = false;
+    btnUpload.addEventListener('click', async function(e) {
+      if (bypassCapture) { bypassCapture = false; return; }
+      const doOpt = document.getElementById('chkOptimize')?.checked;
+      if (!doOpt || typeof uploadQueue === 'undefined' || uploadQueue.length === 0) return;
+
+      e.stopImmediatePropagation();
+      e.preventDefault();
+
+      const mime = document.getElementById('selOptFmt').value;
+      const qual = parseFloat(document.getElementById('slOptQ').value);
+      let savedBytes = 0;
+
+      for (let i = 0; i < uploadQueue.length; i++) {
+        const f = uploadQueue[i];
+        if (/\.(png|jpg|jpeg|webp)$/i.test(f.name)) {
+          const origSize = f.size;
+          const optFile = await compressImageFile(f, mime, qual);
+          savedBytes += Math.max(0, origSize - optFile.size);
+          uploadQueue[i] = optFile;
+        }
+      }
+
+      if (savedBytes > 0 && typeof logMsg === 'function') {
+        const savedKb = (savedBytes / 1024).toFixed(1);
+        document.getElementById('optSavedBadge').textContent = `Ušetřeno ${savedKb} KB`;
+        logMsg(`⚡ Canvas Pipeline: Optimalizováno, ušetřeno ${savedKb} KB místa.`, 'ok');
+      }
+
+      bypassCapture = true;
+      btnUpload.click();
+    }, true);
+  }
+})();
+</script>
+<!-- === KONEC TECH & 3D CRYSTAL ADD-ON === -->
+
 </body>
 </html>
