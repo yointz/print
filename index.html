@@ -1028,6 +1028,178 @@
 })();
 </script>
 <!-- === KONEC TECH & 3D CRYSTAL ADD-ON === -->
+<!-- === AETHER-VAULT LIGHTBOX LUPA & KLÁVESOVÁ NAVIGACE ADD-ON (PŘED </body>) === -->
+<script>
+(function initLightboxUxAddon() {
+  const modal = document.getElementById('modalViewer');
+  const modalBody = document.getElementById('modalBody');
+  const modalHead = modal?.querySelector('.modal-head');
+  if (!modal || !modalBody || !modalHead) return;
 
+  let currentIdx = -1;
+  let zoomScale = 1;
+  let panX = 0, panY = 0;
+  let isPanning = false, startX = 0, startY = 0;
+  let touchStartX = 0;
+
+  // 1. Přidání ovládací lišty lupy a ukazatele pozice (např. "2 / 14 • 100%")
+  const zoomBar = document.createElement('div');
+  zoomBar.style.cssText = 'display:flex;align-items:center;gap:6px;margin-right:auto;margin-left:14px;';
+  zoomBar.innerHTML = `
+    <span id="lbCounter" style="font-family:monospace;font-size:0.75rem;color:#94a3b8;background:#0f172a;padding:3px 8px;border-radius:5px;border:1px solid #1e293b;">0 / 0</span>
+    <button id="lbZoomOut" class="btn-sm" style="flex:none;padding:4px 9px;" title="Oddálit (-)">➖</button>
+    <span id="lbZoomVal" style="font-family:monospace;font-size:0.75rem;color:#10b981;min-width:44px;text-align:center;">100%</span>
+    <button id="lbZoomIn" class="btn-sm" style="flex:none;padding:4px 9px;" title="Přiblížit (+)">➕</button>
+    <button id="lbZoomReset" class="btn-sm" style="flex:none;padding:4px 8px;" title="Reset lupy (0)">Reset</button>
+  `;
+  modalHead.insertBefore(zoomBar, modalHead.lastElementChild);
+
+  // 2. Plovoucí šipky ◀ a ▶ po stranách náhledu (pro myš i mobil)
+  const navBtnStyle = 'position:absolute;top:50%;transform:translateY(-50%);background:rgba(8,13,24,0.82);border:1px solid rgba(56,189,248,0.4);color:#fff;font-size:1.3rem;width:42px;height:54px;border-radius:10px;cursor:pointer;z-index:110;backdrop-filter:blur(8px);transition:0.15s;';
+  const prevBtn = document.createElement('button');
+  prevBtn.innerHTML = '◀';
+  prevBtn.title = 'Předchozí (Šipka vlevo)';
+  prevBtn.style.cssText = navBtnStyle + 'left:16px;';
+
+  const nextBtn = document.createElement('button');
+  nextBtn.innerHTML = '▶';
+  nextBtn.title = 'Další (Šipka vpravo)';
+  nextBtn.style.cssText = navBtnStyle + 'right:16px;';
+
+  modal.appendChild(prevBtn);
+  modal.appendChild(nextBtn);
+
+  function getFilteredList() {
+    if (typeof archiveItems === 'undefined') return [];
+    const q = (document.getElementById('searchInput')?.value || '').toLowerCase().trim();
+    const flt = typeof currentFilter !== 'undefined' ? currentFilter : 'all';
+    return archiveItems.filter(item => {
+      const matchType = flt === 'all' || item.type === flt;
+      const matchName = item.name.toLowerCase().includes(q);
+      return matchType && matchName;
+    });
+  }
+
+  function applyTransform() {
+    const img = modalBody.querySelector('img');
+    document.getElementById('lbZoomVal').textContent = `${Math.round(zoomScale * 100)}%`;
+    if (!img) return;
+    if (zoomScale <= 1) { panX = 0; panY = 0; }
+    img.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomScale})`;
+    img.style.cursor = zoomScale > 1 ? (isPanning ? 'grabbing' : 'grab') : 'zoom-in';
+    img.style.transition = isPanning ? 'none' : 'transform 0.14s ease-out';
+  }
+
+  function setZoom(newScale) {
+    zoomScale = Math.max(1, Math.min(5, newScale));
+    applyTransform();
+  }
+
+  function showItemByIndex(idx) {
+    const list = getFilteredList();
+    if (list.length === 0) return;
+    currentIdx = (idx + list.length) % list.length;
+    const item = list[currentIdx];
+
+    zoomScale = 1; panX = 0; panY = 0;
+    document.getElementById('lbCounter').textContent = `${currentIdx + 1} / ${list.length}`;
+
+    if (typeof openLightbox === 'function') {
+      openLightbox(item);
+      setZoom(1);
+    }
+  }
+
+  // Zjištění indexu právě otevřeného souboru podle titulku v modálu
+  function syncCurrentIndexFromTitle() {
+    const list = getFilteredList();
+    const titleTxt = document.getElementById('modalTitle')?.textContent || '';
+    const found = list.findIndex(x => titleTxt.startsWith(x.name));
+    if (found !== -1) {
+      currentIdx = found;
+      document.getElementById('lbCounter').textContent = `${currentIdx + 1} / ${list.length}`;
+    }
+    zoomScale = 1; panX = 0; panY = 0;
+    applyTransform();
+  }
+
+  // Sledování otevření modálu, aby se hned nastavilo počítadlo a lupa
+  const observer = new MutationObserver(() => {
+    if (modal.style.display === 'flex') syncCurrentIndexFromTitle();
+  });
+  observer.observe(modal, { attributes: true, attributeFilter: ['style'] });
+
+  // Ovládání tlačítek lupy a šipek
+  document.getElementById('lbZoomIn').onclick = () => setZoom(zoomScale + 0.5);
+  document.getElementById('lbZoomOut').onclick = () => setZoom(zoomScale - 0.5);
+  document.getElementById('lbZoomReset').onclick = () => setZoom(1);
+  prevBtn.onclick = () => showItemByIndex(currentIdx - 1);
+  nextBtn.onclick = () => showItemByIndex(currentIdx + 1);
+
+  // Lupa kolečkem myši a dvojklikem na obrázek
+  modalBody.addEventListener('wheel', e => {
+    if (modal.style.display !== 'flex' || !modalBody.querySelector('img')) return;
+    e.preventDefault();
+    setZoom(zoomScale + (e.deltaY < 0 ? 0.35 : -0.35));
+  }, { passive: false });
+
+  modalBody.addEventListener('dblclick', e => {
+    if (!modalBody.querySelector('img')) return;
+    setZoom(zoomScale > 1 ? 1 : 2.5);
+  });
+
+  // Posouvání (Pan) přiblíženého obrázku tažením myší
+  modalBody.addEventListener('mousedown', e => {
+    if (zoomScale <= 1 || !modalBody.querySelector('img')) return;
+    e.preventDefault();
+    isPanning = true;
+    startX = e.clientX - panX;
+    startY = e.clientY - panY;
+    applyTransform();
+  });
+  window.addEventListener('mousemove', e => {
+    if (!isPanning) return;
+    panX = e.clientX - startX;
+    panY = e.clientY - startY;
+    applyTransform();
+  });
+  window.addEventListener('mouseup', () => {
+    if (isPanning) { isPanning = false; applyTransform(); }
+  });
+
+  // Dotykový Swipe na mobilu (přejetí doleva/doprava při 100% zoomu)
+  modalBody.addEventListener('touchstart', e => {
+    if (e.touches.length === 1) touchStartX = e.touches[0].clientX;
+  }, { passive: true });
+  modalBody.addEventListener('touchend', e => {
+    if (zoomScale > 1 || e.changedTouches.length !== 1) return;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    if (Math.abs(dx) > 55) showItemByIndex(currentIdx + (dx < 0 ? 1 : -1));
+  });
+
+  // Klávesové zkratky při otevřeném náhledu (Esc, Šipky, +, -, 0, Home, End)
+  window.addEventListener('keydown', e => {
+    if (modal.style.display !== 'flex') return;
+    if (e.key === 'Escape') {
+      document.getElementById('btnCloseModal')?.click();
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault(); showItemByIndex(currentIdx + 1);
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault(); showItemByIndex(currentIdx - 1);
+    } else if (e.key === 'Home') {
+      e.preventDefault(); showItemByIndex(0);
+    } else if (e.key === 'End') {
+      e.preventDefault(); showItemByIndex(getFilteredList().length - 1);
+    } else if (e.key === '+' || e.key === '=') {
+      e.preventDefault(); setZoom(zoomScale + 0.5);
+    } else if (e.key === '-') {
+      e.preventDefault(); setZoom(zoomScale - 0.5);
+    } else if (e.key === '0') {
+      e.preventDefault(); setZoom(1);
+    }
+  });
+})();
+</script>
+<!-- === KONEC LIGHTBOX LUPA & NAVIGACE ADD-ON === -->
 </body>
 </html>
