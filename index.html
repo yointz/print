@@ -1203,13 +1203,22 @@
 <!-- === KONEC LIGHTBOX LUPA & NAVIGACE ADD-ON === -->
   <!-- === AETHER-VAULT MOBILE PINCH-ZOOM & FLOATING CLOSE BUTTON (PŘED </body>) === -->
 <style>
-  /* Vylepšení rozložení Lightboxu na mobilních displejích */
+  /* Skryje původní hranaté tlačítko Zavřít (zůstane jen plovoucí kulaté X) */
+  #btnCloseModal {
+    display: none !important;
+  }
+
+  /* Uvolní místo vpravo nahoře v liště i na desktopu, aby se nepřekrývalo se stažením */
+  #modalViewer .modal-head {
+    padding-right: 54px;
+  }
+
   @media (max-width: 768px) {
     #modalViewer { padding: 10px; }
     #modalViewer .modal-head {
       flex-wrap: wrap;
       gap: 8px;
-      padding-right: 52px; /* Místo pro velké plovoucí tlačítko X vpravo nahoře */
+      padding-right: 54px;
     }
     #modalViewer .modal-head h3 {
       width: 100%;
@@ -1219,11 +1228,11 @@
       text-overflow: ellipsis;
     }
     #modalBody {
-      touch-action: none; /* Zabrání prohlížeči zoomovat celou stránku místo obrázku */
+      touch-action: none;
     }
   }
 
-  /* Výrazné plovoucí tlačítko X vpravo nahoře (náhrada za Esc na mobilu) */
+  /* Plovoucí kulaté tlačítko X vpravo nahoře */
   #mobileFloatingClose {
     position: fixed;
     top: 14px;
