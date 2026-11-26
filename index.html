@@ -1369,5 +1369,266 @@
 })();
 </script>
 <!-- === KONEC MOBILE PINCH-ZOOM PATCHE === -->
+  <!-- === AETHER-VAULT CLIENT-SIDE OCR & FULLTEXT SEARCH ADD-ON (PŘED </body>) === -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js"></script>
+<script>
+(function initOcrFulltextAddon() {
+  let ocrIndex = {}; // Mapa: { "nazev_souboru.png": "rozpoznaný text..." }
+  let bypassOcr = false;
+
+  // 1. Přidání přepínače OCR do Admin Terminálu nad tlačítko Nahrát
+  const btnUpload = document.getElementById('btnUpload');
+  if (btnUpload && !document.getElementById('ocrPanel')) {
+    const ocrBox = document.createElement('div');
+    ocrBox.id = 'ocrPanel';
+    ocrBox.style.cssText = 'background:#060b16;border:1px solid #1e293b;border-radius:8px;padding:8px 11px;margin-bottom:10px;font-size:0.74rem;display:flex;justify-content:space-between;align-items:center;';
+    ocrBox.innerHTML = `
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;color:#e2e8f0;font-weight:600;">
+        <input type="checkbox" id="chkRunOcr" checked style="accent-color:#38bdf8;">
+        🔍 Automatické OCR čtení textu (CZ+EN fulltext index)
+      </label>
+      <span id="ocrBadge" style="font-family:monospace;color:#38bdf8;font-size:0.69rem;">Připraveno</span>
+    `;
+    btnUpload.parentNode.insertBefore(ocrBox, btnUpload);
+  }
+
+  // Úprava placeholderu vyhledávání
+  const searchInput = document.getElementById('searchInput');
+  if (searchInput) {
+    searchInput.placeholder = '🔍 Hledat podle názvu NEBO textu uvnitř letáku (OCR)...';
+  }
+
+  // 2. Načtení existujícího OCR indexu z GitHubu (vault/ocr_index.json)
+  async function loadOcrIndex() {
+    if (typeof getConfig !== 'function') return;
+    const cfg = getConfig();
+    if (!cfg.owner || !cfg.repo) return;
+
+    try {
+      const headers = { 'Accept': 'application/vnd.github.v3.raw' };
+      if (cfg.token) headers['Authorization'] = `Bearer ${cfg.token}`;
+      const res = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/vault/ocr_index.json?ref=${cfg.branch}&t=${Date.now()}`, { headers });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && typeof data === 'object') {
+          ocrIndex = data;
+          applyOcrSearchFilter();
+        }
+      }
+    } catch (e) {
+      // Index zatím neexistuje (vytvoří se při prvním nahrání s OCR)
+    }
+  }
+
+  // 3. Uložení aktualizovaného OCR indexu zpět na GitHub
+  async function saveOcrIndexToGitHub() {
+    if (typeof getConfig !== 'function') return;
+    const cfg = getConfig();
+    if (!cfg.owner || !cfg.repo || !cfg.token) return;
+
+    const apiUrl = `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/vault/ocr_index.json`;
+    let existingSha = null;
+
+    try {
+      const check = await fetch(`${apiUrl}?ref=${cfg.branch}`, {
+        headers: { 'Authorization': `Bearer ${cfg.token}` }
+      });
+      if (check.ok) {
+        const j = await check.json();
+        existingSha = j.sha;
+      }
+
+      // Bezpečné kódování UTF-8 (české znaky) do Base64
+      const jsonStr = JSON.stringify(ocrIndex, null, 2);
+      const b64 = btoa(unescape(encodeURIComponent(jsonStr)));
+
+      const payload = {
+        message: 'AETHER-VAULT update OCR fulltext index',
+        content: b64,
+        branch: cfg.branch
+      };
+      if (existingSha) payload.sha = existingSha;
+
+      await fetch(apiUrl, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${cfg.token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+      if (typeof logMsg === 'function') logMsg('🔍 Fulltextový OCR index (ocr_index.json) aktualizován.', 'ok');
+    } catch (err) {
+      if (typeof logMsg === 'function') logMsg(`⚠ OCR index se nepodařilo uložit: ${err.message}`, 'err');
+    }
+  }
+
+  // 4. Zachycení nahrávání a spuštění Tesseract OCR na obrázky ve frontě
+  if (btnUpload) {
+    btnUpload.addEventListener('click', async function(e) {
+      if (bypassOcr) { bypassOcr = false; return; }
+      const doOcr = document.getElementById('chkRunOcr')?.checked;
+      if (!doOcr || typeof uploadQueue === 'undefined' || uploadQueue.length === 0 || typeof Tesseract === 'undefined') return;
+
+      const imgFiles = uploadQueue.filter(f => /\.(png|jpg|jpeg|webp)$/i.test(f.name));
+      if (imgFiles.length === 0) return;
+
+      e.stopImmediatePropagation();
+      e.preventDefault();
+
+      const badge = document.getElementById('ocrBadge');
+      btnUpload.disabled = true;
+      if (typeof logMsg === 'function') logMsg(`🔍 Spouštím OCR čtení textu pro ${imgFiles.length} obrázků...`, 'info');
+
+      for (let i = 0; i < imgFiles.length; i++) {
+        const file = imgFiles[i];
+        const safeName = file.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9._-]/g, '_');
+        if (badge) badge.textContent = `OCR ${i + 1}/${imgFiles.length}...`;
+
+        try {
+          const result = await Tesseract.recognize(file, 'ces+eng');
+          const cleanText = (result?.data?.text || '').replace(/\s+/g, ' ').trim();
+          if (cleanText.length > 0) {
+            ocrIndex[safeName] = cleanText;
+            if (typeof logMsg === 'function') {
+              logMsg(`📝 OCR (${safeName}): "${cleanText.slice(0, 55)}${cleanText.length > 55 ? '...' : ''}"`, 'ok');
+            }
+          }
+        } catch (err) {
+          if (typeof logMsg === 'function') logMsg(`⚠ OCR přeskočeno pro ${file.name}`, 'err');
+        }
+      }
+
+      if (badge) badge.textContent = 'Hotovo ✔';
+      await saveOcrIndexToGitHub();
+
+      bypassOcr = true;
+      btnUpload.disabled = false;
+      btnUpload.click();
+    }, true);
+  }
+
+  // 5. Rozšíření vyhledávání v galerii o fulltext v OCR indexu (bez nutnosti přepisovat renderGallery)
+  function applyOcrSearchFilter() {
+    const q = (searchInput?.value || '').toLowerCase().trim();
+    const grid = document.getElementById('vaultGrid');
+    if (!grid || typeof archiveItems === 'undefined') return;
+
+    // Pokud je vyhledávání prázdné, odstraní případné OCR náhledy a nechá výchozí zobrazení
+    if (!q) {
+      grid.querySelectorAll('.ocr-snippet').forEach(el => el.remove());
+      return;
+    }
+
+    // Znovu vykreslí karty, které odpovídají buď názvu souboru, NEBO rozpoznanému OCR textu
+    const flt = typeof currentFilter !== 'undefined' ? currentFilter : 'all';
+    const matched = archiveItems.filter(item => {
+      const matchType = flt === 'all' || item.type === flt;
+      const inName = item.name.toLowerCase().includes(q);
+      const inOcr = (ocrIndex[item.name] || '').toLowerCase().includes(q);
+      return matchType && (inName || inOcr);
+    });
+
+    if (matched.length > 0) {
+      grid.innerHTML = '';
+      matched.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'file-card';
+        const sizeKb = (item.size / 1024).toFixed(1);
+        const ocrTxt = ocrIndex[item.name] || '';
+        const matchInOcr = ocrTxt.toLowerCase().includes(q);
+
+        const snippetHtml = matchInOcr
+          ? `<div class="ocr-snippet" style="font-size:0.68rem;background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);color:#34d399;padding:4px 6px;border-radius:5px;margin-top:4px;font-family:monospace;">🔍 „...${ocrTxt.slice(Math.max(0, ocrTxt.toLowerCase().indexOf(q) - 15), ocrTxt.toLowerCase().indexOf(q) + 38)}...“</div>`
+          : '';
+
+        const thumbHtml = item.type === 'png'
+          ? `<img src="${item.url}" alt="${item.name}" loading="lazy"><span class="type-pill pill-png">IMG</span>`
+          : `<div class="pdf-badge"><span style="font-size:2rem;">📄</span><span>PDF DOKUMENT</span></div><span class="type-pill pill-pdf">PDF</span>`;
+
+        card.innerHTML = `
+          <div class="thumb-wrap" data-open="${item.name}">${thumbHtml}</div>
+          <div class="card-body">
+            <div>
+              <div class="file-name">${item.name}</div>
+              ${snippetHtml}
+              <div class="file-meta" style="margin-top:4px;"><span>${item.type.toUpperCase()}</span><span>${sizeKb} KB</span></div>
+            </div>
+            <div class="card-actions">
+              <button class="btn-sm" data-open="${item.name}">👁 Otevřít</button>
+              <a class="btn-sm" href="${item.url}" download="${item.name}" target="_blank">⬇ Uložit</a>
+            </div>
+          </div>
+        `;
+        grid.appendChild(card);
+      });
+
+      grid.querySelectorAll('[data-open]').forEach(el => {
+        el.onclick = () => {
+          const found = archiveItems.find(x => x.name === el.dataset.open);
+          if (found && typeof openLightbox === 'function') openLightbox(found);
+        };
+      });
+    }
+  }
+
+  searchInput?.addEventListener('input', () => setTimeout(applyOcrSearchFilter, 10));
+
+  // 6. Tlačítko pro zobrazení a zkopírování rozpoznaného OCR textu přímo v Lightboxu
+  const modal = document.getElementById('modalViewer');
+  const modalHead = modal?.querySelector('.modal-head');
+  if (modal && modalHead && !document.getElementById('btnShowOcrText')) {
+    const ocrViewBtn = document.createElement('button');
+    ocrViewBtn.id = 'btnShowOcrText';
+    ocrViewBtn.className = 'btn-sm';
+    ocrViewBtn.style.cssText = 'flex:none;padding:4px 9px;border-color:#10b981;color:#34d399;';
+    ocrViewBtn.textContent = '📝 OCR Text';
+    modalHead.insertBefore(ocrViewBtn, modalHead.lastElementChild);
+
+    const ocrDrawer = document.createElement('div');
+    ocrDrawer.id = 'ocrDrawer';
+    ocrDrawer.style.cssText = 'display:none;position:fixed;bottom:16px;left:50%;transform:translateX(-50%);width:min(680px,92vw);max-height:32vh;overflow-y:auto;background:rgba(8,13,24,0.96);border:1px solid #10b981;border-radius:10px;padding:12px;z-index:160;font-family:monospace;font-size:0.75rem;color:#e2e8f0;box-shadow:0 10px 30px rgba(0,0,0,0.9);';
+    modal.appendChild(ocrDrawer);
+
+    ocrViewBtn.onclick = () => {
+      if (ocrDrawer.style.display === 'block') {
+        ocrDrawer.style.display = 'none';
+        return;
+      }
+      const titleTxt = document.getElementById('modalTitle')?.textContent || '';
+      const fileName = titleTxt.split(' (')[0];
+      const text = ocrIndex[fileName];
+
+      ocrDrawer.innerHTML = text
+        ? `<div style="display:flex;justify-content:space-between;margin-bottom:6px;color:#34d399;font-weight:700;"><span>ROZPOZNANÝ TEXT (OCR):</span><button id="btnCopyOcr" class="btn-sm" style="flex:none;padding:2px 8px;">📋 Kopírovat text</button></div><div style="white-space:pre-wrap;line-height:1.45;">${text}</div>`
+        : `<div style="color:#94a3b8;">Pro tento soubor zatím není uložen žádný OCR text. Nahraj ho znovu se zapnutým OCR.</div>`;
+      ocrDrawer.style.display = 'block';
+
+      const copyBtn = document.getElementById('btnCopyOcr');
+      if (copyBtn && text) {
+        copyBtn.onclick = () => {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          copyBtn.textContent = '✔ Zkopírováno!';
+        };
+      }
+    };
+
+    const obs = new MutationObserver(() => {
+      if (modal.style.display !== 'flex') ocrDrawer.style.display = 'none';
+    });
+    obs.observe(modal, { attributes: true, attributeFilter: ['style'] });
+  }
+
+  // Spustí načtení indexu po startu stránky
+  setTimeout(loadOcrIndex, 900);
+})();
+</script>
+<!-- === KONEC OCR & FULLTEXT ADD-ON === -->
 </body>
 </html>
+
